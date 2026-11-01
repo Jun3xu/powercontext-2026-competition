@@ -232,6 +232,48 @@ class OceanBaseMemoryFTSIndex:
 class OceanBaseMemoryVectorIndex:
     """OceanBase HNSW strategy over rebuildable active-head embeddings."""
 
+    async def search_hybrid(self, connection, scope_id, request):
+        if request.embedding_profile != self.profile or request.query_vector is None:
+            raise CapabilityNotSupportedError("embedding-profile")
+        if not await self.vector_complete(connection, scope_id, request.memories, self.profile):
+            raise CapabilityNotSupportedError("vector")
+        tags = "" if request.tag_filter is None else memory_tag_sql("m")
+        approximate = " APPROXIMATE" if request.tag_filter is None else ""
+        sql = f"""
+SELECT * FROM (
+ SELECT m.memory_artifact_id, m.head_revision, m.entry_id, m.entry_version_id,
+ v.text, 'fts' AS channel,
+ -MATCH(m.searchable_text) AGAINST (:query_text) AS ordering_score,
+ NULL AS distance
+ FROM pc_memory_entry_heads AS m
+ JOIN pc_memory_entry_versions AS v ON v.scope_id=m.scope_id
+ AND v.memory_artifact_id=m.memory_artifact_id AND v.entry_version_id=m.entry_version_id
+ WHERE m.scope_id=:scope_id AND m.memory_artifact_id IN :memory_artifact_ids
+ AND MATCH(m.searchable_text) AGAINST (:query_text)
+ {tags}
+ ORDER BY ordering_score, m.memory_artifact_id, m.entry_id, m.entry_version_id
+ LIMIT :candidate_limit
+) AS lexical
+UNION ALL
+SELECT * FROM (
+ SELECT m.memory_artifact_id, m.head_revision, m.entry_id, m.entry_version_id,
+ v.text, 'vector' AS channel,
+ l2_distance(m.embedding, :query_vector) AS ordering_score,
+ l2_distance(m.embedding, :query_vector) AS distance
+ FROM pc_memory_vector_entries AS m
+ JOIN pc_memory_entry_versions AS v ON v.scope_id=m.scope_id
+ AND v.memory_artifact_id=m.memory_artifact_id AND v.entry_version_id=m.entry_version_id
+ WHERE m.scope_id=:scope_id AND m.memory_artifact_id IN :memory_artifact_ids
+ {tags}
+ ORDER BY l2_distance(m.embedding, :query_vector){approximate}
+ LIMIT :candidate_limit
+) AS semantic
+ORDER BY channel, ordering_score, memory_artifact_id, entry_id, entry_version_id
+"""
+        statement = text(sql).bindparams(bindparam("memory_artifact_ids", expanding=True), bindparam("query_vector", type_=VECTOR(self.profile.dimension)))
+        rows = (await connection.execute(statement, {"scope_id": scope_id, "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories), "query_text": request.analyzed_query, "query_vector": validate_embedding(request.query_vector, dimension=self.profile.dimension), "candidate_limit": request.candidate_limit, **memory_tag_parameters(request.tag_filter)})).mappings().all()
+        return MemorySearchChannels(fts=memory_channel_hits((row for row in rows if row["channel"] == "fts"), request.memories), vector=memory_channel_hits((row for row in rows if row["channel"] == "vector"), request.memories))
+
     def __init__(self, profile: EmbeddingProfile) -> None:
         if profile.dimension < 1 or profile.distance != "l2" or profile.normalization != "unit":
             raise CapabilityNotSupportedError(
