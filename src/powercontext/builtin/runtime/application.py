@@ -3126,6 +3126,7 @@ class BuiltinRuntime:
         self.work = WorkApplication(self)
         self.memory = MemoryApplication(self)
         from powercontext.builtin.runtime.source_lifecycle import SourceLifecycleApplication
+
         self.lifecycle = SourceLifecycleApplication(self)
         self.topic_memory = TopicMemoryApplication(self)
         self.records = RecordApplication(self)

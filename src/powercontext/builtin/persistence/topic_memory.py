@@ -487,13 +487,22 @@ class TopicMemoryRepository:
             admission=admission,
         )
         channels = await self.index.search(connection, scope_id, request)
-        inactive = set(await connection.scalars(select(ARTIFACT_HEADS_TABLE.c.artifact_id).where(
-            ARTIFACT_HEADS_TABLE.c.scope_id == scope_id,
-            ARTIFACT_HEADS_TABLE.c.family == TopicMemory.family,
-            ARTIFACT_HEADS_TABLE.c.lifecycle_state != "active",
-        )))
+        inactive = set(
+            await connection.scalars(
+                select(ARTIFACT_HEADS_TABLE.c.artifact_id).where(
+                    ARTIFACT_HEADS_TABLE.c.scope_id == scope_id,
+                    ARTIFACT_HEADS_TABLE.c.family == TopicMemory.family,
+                    ARTIFACT_HEADS_TABLE.c.lifecycle_state != "active",
+                )
+            )
+        )
         if inactive:
-            channels = channels.model_copy(update={name: tuple(hit for hit in getattr(channels, name) if hit.artifact_ref.artifact_id not in inactive) for name in ("topic_fts", "topic_vector", "detail_fts", "detail_vector")})
+            channels = channels.model_copy(
+                update={
+                    name: tuple(hit for hit in getattr(channels, name) if hit.artifact_ref.artifact_id not in inactive)
+                    for name in ("topic_fts", "topic_vector", "detail_fts", "detail_vector")
+                }
+            )
         await self._check_retrieval_shape(connection)
         outcome = _fuse_topic_memory_rankings(query, channels, limit, mode=used_mode, admission=admission)
         return TopicMemorySearchResult(

@@ -801,13 +801,19 @@ class ArtifactProcessingSupervisor:
         admitted = []
         async with self._database.transaction() as connection:
             await self._leases.require_fence(connection, self._require_current_fence())
-            rows = await self._intents.scan(connection, state.binding.binding_name, limit=_DISCOVERY_PAGE_SIZE, dirty_only=True)
+            rows = await self._intents.scan(
+                connection, state.binding.binding_name, limit=_DISCOVERY_PAGE_SIZE, dirty_only=True
+            )
             for row in rows:
                 if row.scope_id in state.queued or row.scope_id in state.running or row.scope_id in state.retries:
                     continue
                 if row.requested_generation > row.handled_generation:
                     continue
-                high = await connection.scalar(select(SOURCE_JOURNAL_HEADS_TABLE.c.position).where(SOURCE_JOURNAL_HEADS_TABLE.c.scope_id == row.scope_id))
+                high = await connection.scalar(
+                    select(SOURCE_JOURNAL_HEADS_TABLE.c.position).where(
+                        SOURCE_JOURNAL_HEADS_TABLE.c.scope_id == row.scope_id
+                    )
+                )
                 cursor = await SourceCursorRepository().load(connection, row.scope_id, state.binding.binding_name)
                 pending = int(high or 0) - (0 if cursor is None else cursor.cursor.sequence)
                 if pending >= state.binding.source_count_threshold:

@@ -1,10 +1,26 @@
+# Copyright (c) 2026 OceanBase.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Complete physical PDF pages with exact revision references."""
+
 from __future__ import annotations
 
 import hashlib
 import io
 
 from pydantic import BaseModel
+
 from powercontext.sources.definitions import AdapterSourceDefinition
 from powercontext.sources.models import Source, SourceMaterialization
 from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY, TextEvidence
@@ -24,16 +40,22 @@ class PDFPageInput(BaseModel):
 
 def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
     from pypdf import PdfReader
+
     if not value.document_id.strip():
-        raise ValueError("blank document identity")
+        raise ValueError("blank document identity")  # noqa: TRY003
     try:
         reader = PdfReader(io.BytesIO(value.content), strict=True)
         if reader.is_encrypted and not reader.decrypt(""):
-            raise ValueError("password required")
+            raise ValueError("password required")  # noqa: TRY301, TRY003
         digest = hashlib.sha256(value.content).hexdigest()
-        return tuple(PDFPageInput(document_id=value.document_id, document_sha256=digest, page_number=i, text=page.extract_text() or "") for i, page in enumerate(reader.pages, 1))
+        return tuple(
+            PDFPageInput(
+                document_id=value.document_id, document_sha256=digest, page_number=i, text=page.extract_text() or ""
+            )
+            for i, page in enumerate(reader.pages, 1)
+        )
     except Exception as error:
-        raise ValueError("cannot completely parse PDF") from error
+        raise ValueError("cannot completely parse PDF") from error  # noqa: TRY003
 
 
 class PDFPageSource(Source):
@@ -47,7 +69,11 @@ class PDFPageAdapter:
 
     async def resolve(self, value, /):
         digest = hashlib.sha256(value.document_id.encode()).hexdigest()
-        return PDFPageSource(name=f"pdf:{digest}:{value.document_sha256}:{value.page_number}", materialization=SourceMaterialization.CAPTURED, page=value)
+        return PDFPageSource(
+            name=f"pdf:{digest}:{value.document_sha256}:{value.page_number}",
+            materialization=SourceMaterialization.CAPTURED,
+            page=value,
+        )
 
     async def read(self, source, /):
         return source.page
@@ -61,7 +87,12 @@ class PDFPageProjection:
 
     def project(self, source, /):
         page = source.page
-        return TextEvidence(source_type="pdf-page", source_id=source.name, content=f"{page.document_id}\n{page.text}", metadata=page.model_dump(exclude={"text"}))
+        return TextEvidence(
+            source_type="pdf-page",
+            source_id=source.name,
+            content=f"{page.document_id}\n{page.text}",
+            metadata=page.model_dump(exclude={"text"}),
+        )
 
 
 PDF_PAGE_SOURCE_DEFINITION = AdapterSourceDefinition(PDFPageAdapter(), projections=(PDFPageProjection(),))
@@ -79,9 +110,11 @@ async def search_pdf_pages(memory, question: str, limit: int = 10):
     records = (await memory.list()).entries
     if not records:
         return ()
-    stop = set("a an the is are was were be been of in on at to for from by with and or as what how much many does did do would have has had which this that its it company's company".split())
+    stop = {"a", "an", "the", "is", "are", "was", "were", "be", "been", "of", "in", "on", "at", "to", "for", "from", "by", "with", "and", "or", "as", "what", "how", "much", "many", "does", "did", "do", "would", "have", "has", "had", "which", "this", "that", "its", "it", "company's", "company"}
+
     def tokens(text):
         return [word for word in re.findall(r"[a-z]+|\d+", text.lower()) if word not in stop]
+
     counts = [Counter(tokens(record.entry.text)) for record in records]
     lengths = [sum(count.values()) for count in counts]
     average = sum(lengths) / max(1, len(lengths)) or 1

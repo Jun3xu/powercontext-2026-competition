@@ -1,8 +1,24 @@
+# Copyright (c) 2026 OceanBase.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Persistent evidence dependency graph and native availability propagation."""
+
 from __future__ import annotations
 
 import asyncio
 import json
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import insert, select, update
 
@@ -29,7 +45,7 @@ class SourceLifecycleEvent(BaseModel):
     @classmethod
     def nonblank(cls, value):
         if not value.strip():
-            raise ValueError("must not be blank")
+            raise ValueError("must not be blank")  # noqa: TRY003
         return value
 
 
@@ -49,7 +65,9 @@ class SourceLifecycleService:
 
     async def _load(self):
         async with self.database.connection() as connection:
-            rows = (await connection.execute(select(TABLE.c.node_id, TABLE.c.payload).where(TABLE.c.scope_id == self.scope))).all()
+            rows = (
+                await connection.execute(select(TABLE.c.node_id, TABLE.c.payload).where(TABLE.c.scope_id == self.scope))
+            ).all()
         return {key: json.loads(payload) for key, payload in rows}
 
     async def _save(self, key, value, *, new=False):
@@ -58,36 +76,51 @@ class SourceLifecycleService:
             if new:
                 await connection.execute(insert(TABLE).values(scope_id=self.scope, node_id=key, payload=payload))
             else:
-                await connection.execute(update(TABLE).where(TABLE.c.scope_id == self.scope, TABLE.c.node_id == key).values(payload=payload))
+                await connection.execute(
+                    update(TABLE).where(TABLE.c.scope_id == self.scope, TABLE.c.node_id == key).values(payload=payload)
+                )
 
     async def register_source(self, node_id, source_ref, revision=1):
         if type(revision) is not int or revision < 1:
-            raise SourceLifecycleError("invalid revision")
+            raise SourceLifecycleError("invalid revision")  # noqa: TRY003
         await self.runtime.records.for_scope(self.scope).get_source(source_ref.source_type, source_ref.source_id)
         await self._register(node_id, "source", source_ref, (), "all", revision)
 
     async def register_memory(self, node_id, citation, *, parents, policy="all"):
         from powercontext.builtin.runtime.models import GetMemoryEntryRequest
+
         await self.runtime.memory.for_scope(self.scope).get(GetMemoryEntryRequest(citation=citation))
         await self._register(node_id, "memory", citation, parents, policy, None)
 
     async def register_topic(self, node_id, artifact_ref, *, parents, policy="all"):
         if artifact_ref.family != "topic-memory":
-            raise SourceLifecycleError("not a topic")
-        await self.runtime.records.for_scope(self.scope).get_artifact_revision(artifact_ref.family, artifact_ref.artifact_id, artifact_ref.revision)
+            raise SourceLifecycleError("not a topic")  # noqa: TRY003
+        await self.runtime.records.for_scope(self.scope).get_artifact_revision(
+            artifact_ref.family, artifact_ref.artifact_id, artifact_ref.revision
+        )
         await self._register(node_id, "topic", artifact_ref, parents, policy, None)
 
     async def _register(self, key, kind, reference, parents, policy, revision):
         if not isinstance(key, str) or not key.strip() or len(key) > 256 or policy not in {"all", "any"}:
-            raise SourceLifecycleError("invalid node")
+            raise SourceLifecycleError("invalid node")  # noqa: TRY003
         async with self.lock:
             nodes = await self._load()
-            if kind != "source" and (not parents or len(set(parents)) != len(parents) or any(parent not in nodes or parent == key for parent in parents)):
-                raise SourceLifecycleError("invalid parents")
-            binding = dict(kind=kind, reference=reference.model_dump(mode="json"), parents=list(parents), policy=policy, revision=revision)
+            if kind != "source" and (
+                not parents
+                or len(set(parents)) != len(parents)
+                or any(parent not in nodes or parent == key for parent in parents)
+            ):
+                raise SourceLifecycleError("invalid parents")  # noqa: TRY003
+            binding = {
+                "kind": kind,
+                "reference": reference.model_dump(mode="json"),
+                "parents": list(parents),
+                "policy": policy,
+                "revision": revision,
+            }
             if key in nodes:
                 if any(nodes[key][field] != value for field, value in binding.items()):
-                    raise SourceLifecycleError("conflicting node binding")
+                    raise SourceLifecycleError("conflicting node binding")  # noqa: TRY003
             else:
                 nodes[key] = {**binding, "available": True, "event": None}
                 await self._save(key, nodes[key], new=True)
@@ -98,11 +131,13 @@ class SourceLifecycleService:
             nodes = await self._load()
             node = nodes.get(event.node_id)
             if node is None or node["kind"] != "source" or node["revision"] != event.revision:
-                raise SourceLifecycleError("unknown source or revision")
+                raise SourceLifecycleError("unknown source or revision")  # noqa: TRY003
             previous = node["event"]
             data = event.model_dump(mode="json")
-            if previous is not None and (previous["sequence"] > event.sequence or previous["sequence"] == event.sequence and previous != data):
-                raise SourceLifecycleError("event sequence conflict")
+            if previous is not None and (
+                previous["sequence"] > event.sequence or (previous["sequence"] == event.sequence and previous != data)
+            ):
+                raise SourceLifecycleError("event sequence conflict")  # noqa: TRY003
             node.update(event=data, available=event.available)
             # Persist intent first: retries reconcile any interrupted native writes.
             await self._save(event.node_id, node)
@@ -114,7 +149,7 @@ class SourceLifecycleService:
         while pending:
             ready = [key for key, node in pending.items() if all(parent not in pending for parent in node["parents"])]
             if not ready:
-                raise SourceLifecycleError("cyclic graph")
+                raise SourceLifecycleError("cyclic graph")  # noqa: TRY003
             for key in ready:
                 node = pending.pop(key)
                 if node["kind"] == "source":
@@ -138,7 +173,11 @@ class SourceLifecycleService:
                 current = await service.latest(await service.revision(reference.memory_ref))
                 entries = await service.entries(current)
                 entry = next(entry for entry in entries if entry.entry_id == reference.entry_id)
-                record = next(row for row in (await self.runtime.memory.for_scope(self.scope).list(include_inactive=True)).entries if row.entry.entry_id == reference.entry_id)
+                record = next(
+                    row
+                    for row in (await self.runtime.memory.for_scope(self.scope).list(include_inactive=True)).entries
+                    if row.entry.entry_id == reference.entry_id
+                )
                 if (record.state == "active") != available:
                     operation = service.reactivate if available else service.forget
                     await operation(current, entries=(entry,), reason="source lifecycle")
@@ -149,14 +188,22 @@ class SourceLifecycleService:
                 current = await repository.get(connection, self.scope, reference.family, reference.artifact_id)
                 state = ArtifactLifecycleState.ACTIVE if available else ArtifactLifecycleState.DEPRECATED
                 if current.lifecycle_state != state:
-                    await repository.transition(connection, self.scope, reference.family, reference.artifact_id, current.governance_generation, state, None)
+                    await repository.transition(
+                        connection,
+                        self.scope,
+                        reference.family,
+                        reference.artifact_id,
+                        current.governance_generation,
+                        state,
+                        None,
+                    )
 
     async def resolve(self, node_id, *, purpose):
         nodes = await self._load()
         if node_id not in nodes or purpose not in {"generation", "audit"}:
-            raise SourceLifecycleError("unknown node or purpose")
+            raise SourceLifecycleError("unknown node or purpose")  # noqa: TRY003
         node = nodes[node_id]
         if purpose == "generation" and not node["available"]:
-            raise SourceLifecycleError("evidence is unavailable")
+            raise SourceLifecycleError("evidence is unavailable")  # noqa: TRY003
         cls = {"memory": MemoryCitation, "topic": ArtifactRef, "source": SourceRef}[node["kind"]]
         return cls.model_validate(node["reference"])

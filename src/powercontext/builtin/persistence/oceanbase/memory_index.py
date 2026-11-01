@@ -269,10 +269,32 @@ SELECT * FROM (
  LIMIT :candidate_limit
 ) AS semantic
 ORDER BY channel, ordering_score, memory_artifact_id, entry_id, entry_version_id
-"""
-        statement = text(sql).bindparams(bindparam("memory_artifact_ids", expanding=True), bindparam("query_vector", type_=VECTOR(self.profile.dimension)))
-        rows = (await connection.execute(statement, {"scope_id": scope_id, "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories), "query_text": request.analyzed_query, "query_vector": validate_embedding(request.query_vector, dimension=self.profile.dimension), "candidate_limit": request.candidate_limit, **memory_tag_parameters(request.tag_filter)})).mappings().all()
-        return MemorySearchChannels(fts=memory_channel_hits((row for row in rows if row["channel"] == "fts"), request.memories), vector=memory_channel_hits((row for row in rows if row["channel"] == "vector"), request.memories))
+"""  # noqa: S608 - only fixed SQL fragments are interpolated; values use bound parameters.
+        statement = text(sql).bindparams(
+            bindparam("memory_artifact_ids", expanding=True),
+            bindparam("query_vector", type_=VECTOR(self.profile.dimension)),
+        )
+        rows = (
+            (
+                await connection.execute(
+                    statement,
+                    {
+                        "scope_id": scope_id,
+                        "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories),
+                        "query_text": request.analyzed_query,
+                        "query_vector": validate_embedding(request.query_vector, dimension=self.profile.dimension),
+                        "candidate_limit": request.candidate_limit,
+                        **memory_tag_parameters(request.tag_filter),
+                    },
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return MemorySearchChannels(
+            fts=memory_channel_hits((row for row in rows if row["channel"] == "fts"), request.memories),
+            vector=memory_channel_hits((row for row in rows if row["channel"] == "vector"), request.memories),
+        )
 
     def __init__(self, profile: EmbeddingProfile) -> None:
         if profile.dimension < 1 or profile.distance != "l2" or profile.normalization != "unit":

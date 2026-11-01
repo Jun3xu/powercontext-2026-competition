@@ -1,4 +1,19 @@
+# Copyright (c) 2026 OceanBase.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Lossless Pi v3 branch evidence and durable incremental acquisition."""
+
 from __future__ import annotations
 
 import hashlib
@@ -36,7 +51,9 @@ def _text(content):
         if block.get("type") == "text":
             parts.append(block.get("text", ""))
         elif block.get("type") == "toolCall":
-            arguments = json.dumps(block.get("arguments", {}), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            arguments = json.dumps(
+                block.get("arguments", {}), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
             parts.append(f"[tool_call {block.get('name', '')} {block.get('id', '')}] {arguments}")
     return "\n".join(parts)
 
@@ -45,26 +62,31 @@ def _records(value):
     try:
         rows = [json.loads(line) for line in value.content.decode("utf-8-sig").splitlines() if line.strip()]
         header = rows[0]
-        if header.get("type") != "session" or header.get("version") != 3 or not isinstance(header.get("id"), str) or not header["id"].strip():
-            raise ValueError("invalid session header")
+        if (
+            header.get("type") != "session"
+            or header.get("version") != 3
+            or not isinstance(header.get("id"), str)
+            or not header["id"].strip()
+        ):
+            raise ValueError("invalid session header")  # noqa: TRY003
         nodes = {}
         for row in rows[1:]:
             key = row.get("id")
             if not isinstance(key, str) or not key or key in nodes or "parentId" not in row:
-                raise ValueError("invalid event identity")
+                raise ValueError("invalid event identity")  # noqa: TRY003
             if row["parentId"] is not None and row["parentId"] not in nodes:
-                raise ValueError("parent must precede child")
+                raise ValueError("parent must precede child")  # noqa: TRY003
             nodes[key] = row
         return header["id"], nodes
     except (IndexError, AttributeError, TypeError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError("invalid Pi archive") from error
+        raise ValueError("invalid Pi archive") from error  # noqa: TRY003
 
 
 def parse_pi_session(value: PiSessionInput) -> tuple[PiEventInput, ...]:
     session_id, nodes = _records(value)
     leaf = value.leaf_id if value.leaf_id is not None else next(reversed(nodes), None)
     if leaf is not None and leaf not in nodes:
-        raise ValueError("unknown leaf")
+        raise ValueError("unknown leaf")  # noqa: TRY003
     chain = []
     while leaf is not None:
         row = nodes[leaf]
@@ -78,7 +100,11 @@ def parse_pi_session(value: PiSessionInput) -> tuple[PiEventInput, ...]:
             role = message.get("role", "")
             body = _text(message.get("content"))
             if role == "toolResult":
-                body = f"[tool_result {message.get('toolName', '')} {message.get('toolCallId', '')}] {body}" if body else ""
+                body = (
+                    f"[tool_result {message.get('toolName', '')} {message.get('toolCallId', '')}] {body}"
+                    if body
+                    else ""
+                )
             elif role == "bashExecution":
                 body = f"$ {message.get('command', '')}\n{message.get('output', '')}"
         elif kind in {"compaction", "branch_summary"}:
@@ -88,7 +114,17 @@ def parse_pi_session(value: PiSessionInput) -> tuple[PiEventInput, ...]:
         else:
             continue
         if body:
-            events.append(PiEventInput(session_id=session_id, event_id=row["id"], parent_id=row["parentId"], event_type=kind, role=role, content=f"{role}: {body}", record=row))
+            events.append(
+                PiEventInput(
+                    session_id=session_id,
+                    event_id=row["id"],
+                    parent_id=row["parentId"],
+                    event_type=kind,
+                    role=role,
+                    content=f"{role}: {body}",
+                    record=row,
+                )
+            )
     return tuple(events)
 
 
@@ -102,7 +138,9 @@ class PiEventAdapter:
     name = "pi-event"
 
     async def resolve(self, value, /):
-        identity = hashlib.sha256(json.dumps([value.session_id, value.event_id], ensure_ascii=False).encode()).hexdigest()
+        identity = hashlib.sha256(
+            json.dumps([value.session_id, value.event_id], ensure_ascii=False).encode()
+        ).hexdigest()
         return PiEventSource(name=f"pi:{identity}", materialization=SourceMaterialization.CAPTURED, event=value)
 
     async def read(self, source, /):
@@ -117,7 +155,12 @@ class PiEventProjection:
 
     def project(self, source, /):
         event = source.event
-        return TextEvidence(source_type="pi-event", source_id=source.name, content=event.content, metadata=event.model_dump(include={"session_id", "event_id", "parent_id", "event_type", "role"}))
+        return TextEvidence(
+            source_type="pi-event",
+            source_id=source.name,
+            content=event.content,
+            metadata=event.model_dump(include={"session_id", "event_id", "parent_id", "event_type", "role"}),
+        )
 
 
 PI_EVENT_SOURCE_DEFINITION = AdapterSourceDefinition(PiEventAdapter(), projections=(PiEventProjection(),))
@@ -136,10 +179,15 @@ class PiSessionConnector:
         events = parse_pi_session(value)
         session_id, nodes = _records(value)
         previous = dict(session.checkpoint or {})
-        fingerprints = {json.dumps([session_id, key]): hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode()).hexdigest() for key, row in nodes.items()}
+        fingerprints = {
+            json.dumps([session_id, key]): hashlib.sha256(
+                json.dumps(row, ensure_ascii=False, sort_keys=True).encode()
+            ).hexdigest()
+            for key, row in nodes.items()
+        }
         for key, digest in previous.items():
             if key in fingerprints and fingerprints[key] != digest:
-                raise ValueError("imported event was modified")
+                raise ValueError("imported event was modified")  # noqa: TRY003
         for event in events:
             key = json.dumps([event.session_id, event.event_id])
             if key not in previous:
