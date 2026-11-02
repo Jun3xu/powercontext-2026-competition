@@ -107,3 +107,13 @@ def test_blank_page_with_null_optional_xobjects_is_valid():
     reader = PdfReader(io.BytesIO(output.getvalue()), strict=True)
     validate_pdf_text_streams(reader)
     assert reader.pages[0].extract_text() == ""
+
+
+def test_large_complete_stream_with_trailing_newline_terminates():
+    # The decoder reaches EOF during a bounded-output iteration and leaves the
+    # stream separator in unconsumed_tail. It must not be fed that tail again.
+    data = zlib.compress(_TEXT + b" " * 100000) + b"\n"
+    raw = _report(((data, False),))
+    validate_pdf_text_streams(PdfReader(io.BytesIO(raw), strict=True))
+    pages = parse_pdf_document(PDFDocumentInput(document_id="large-complete", content=raw))
+    assert pages[0].text == "Complete text"

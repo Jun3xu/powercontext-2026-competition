@@ -26,7 +26,7 @@ def _require_complete_deflate(data: bytes) -> None:
     decoder = zlib.decompressobj()
     pending = data
     try:
-        while pending:
+        while pending and not decoder.eof:
             # Discard decoded chunks; validation need not retain a second full copy
             # of a potentially large content stream.
             decoder.decompress(pending, 65536)

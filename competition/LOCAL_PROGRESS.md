@@ -44,3 +44,5 @@ PDF 检索使用离线财务同义词扩展、轻量词形归一化、公司文�
 独立审查后，Linux x86_64 离线诊断容器中的损坏流/完整流/过滤器串联/空白页/空密码 RC4、AES-128、AES-256 回归共 11 项通过（1.26s），日志 `.artifacts/pdf-validation-native-20261102.log`。宿主机公开 PDF 验收 6 项通过；Linux 离线真实 Runtime 公开 PDF 验收同样 6 项通过（38.41s），日志 `.artifacts/pdf-validation-acceptance-native-20261102.log`。本轮不更改检索排序。
 
 本轮全量 prek 已执行：通用检查通过，既有公开资产格式与全仓 ty 诊断仍阻止全部通过；自动格式变更已撤回。保留原始公开验收文件和锁文件，改动文件的完整 Ruff、格式、指定竞赛环境 ty 检查通过。完整日志 `.artifacts/pdf-validation-prek-20261102.log`。
+
+大于 64 KiB 的 Flate 输出带尾部字节时，校验循环显式在解码 EOF 结束，避免重复处理 unconsumed_tail。完整大流、尾部换行、分块边界及截断已独立复查。Linux 离线校验测试 12 项通过（1.40s），日志 `.artifacts/pdf-validation-native-eof-20261102.log`；宿主机公开 PDF 验收 6 项通过。全量 prek 再次执行后恢复了公开资产的自动格式修改，日志 `.artifacts/pdf-validation-prek-eof-20261102.log`；本轮改动 Ruff/格式/指定竞赛环境 ty 均通过。
