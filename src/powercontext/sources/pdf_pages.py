@@ -21,6 +21,7 @@ import io
 
 from pydantic import BaseModel
 
+from powercontext.sources._pdf_validation import validate_pdf_text_streams
 from powercontext.sources.definitions import AdapterSourceDefinition
 from powercontext.sources.models import Source, SourceMaterialization
 from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY, TextEvidence
@@ -47,6 +48,7 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
         reader = PdfReader(io.BytesIO(value.content), strict=True)
         if reader.is_encrypted and not reader.decrypt(""):
             raise ValueError("password required")  # noqa: TRY301, TRY003
+        validate_pdf_text_streams(reader)
         digest = hashlib.sha256(value.content).hexdigest()
         return tuple(
             PDFPageInput(
