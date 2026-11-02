@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from pydantic import JsonValue
@@ -31,6 +33,56 @@ from powercontext.sources import (
     SourceRef,
 )
 from powercontext.sources.connectors import ConnectorLifecycle
+from powercontext.sources.pi_session import PiSessionConnector
+
+
+def test_pi_deleted_imported_branch_does_not_advance_checkpoint(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        path = tmp_path / "session.jsonl"
+        header = {"type": "session", "version": 3, "id": "tree"}
+        root = {"type": "message", "id": "root", "parentId": None, "message": {"role": "user", "content": "root"}}
+        left = {
+            "type": "message",
+            "id": "left",
+            "parentId": "root",
+            "message": {"role": "assistant", "content": "left"},
+        }
+        right = {
+            "type": "message",
+            "id": "right",
+            "parentId": "root",
+            "message": {"role": "assistant", "content": "right"},
+        }
+
+        def write(records: list[dict]) -> None:
+            path.write_text("\n".join(json.dumps(row) for row in [header, *records]), encoding="utf-8")
+
+        events: list[str] = []
+        checkpoints = MemoryCheckpointStore(events)
+        binding = ConnectorBinding(
+            scope_id="project", binding_id="pi", connector_name="pi-session-history", connector_version="1"
+        )
+
+        def lifecycle() -> ConnectorLifecycle:
+            return ConnectorLifecycle(sink=AcceptingSourceSink(events), checkpoints=checkpoints)
+
+        write([root, left, right])
+        first = await lifecycle().run(PiSessionConnector(path, "left"), binding)
+        accepted_events = list(events)
+        write([root, right])
+        with pytest.raises(ValueError, match="imported event"):
+            await lifecycle().run(PiSessionConnector(path, "right"), binding)
+        assert events == accepted_events
+        assert await checkpoints.load(binding) == first.committed_checkpoint
+
+        write([root, left, right])
+        repaired = await lifecycle().run(PiSessionConnector(path, "right"), binding)
+        assert repaired.previous_checkpoint == first.committed_checkpoint
+        assert [item.item_id for item in repaired.items] == ["right"]
+        replay = await lifecycle().run(PiSessionConnector(path, "left"), binding)
+        assert replay.items == ()
+
+    asyncio.run(scenario())
 
 
 class AcceptingSourceSink:

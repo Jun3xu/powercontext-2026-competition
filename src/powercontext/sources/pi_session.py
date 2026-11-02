@@ -186,8 +186,8 @@ class PiSessionConnector:
             for key, row in nodes.items()
         }
         for key, digest in previous.items():
-            if key in fingerprints and fingerprints[key] != digest:
-                raise ValueError("imported event was modified")  # noqa: TRY003
+            if json.loads(key)[0] == session_id and fingerprints.get(key) != digest:
+                raise ValueError("imported event was modified or removed")  # noqa: TRY003
         for event in events:
             key = json.dumps([event.session_id, event.event_id])
             if key not in previous:
