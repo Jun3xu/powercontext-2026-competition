@@ -19,10 +19,10 @@
 | 证据选择 | 3 |
 | 合计 | 94 |
 
-seekdb 单 SQL 混合检索已实现，尚未在 Linux x86_64 原生 seekdb 环境执行验证。
+seekdb 单 SQL 混合检索已实现；本机缺少 `pylibseekdb` 原生绑定，尚未在 Linux x86_64 环境执行验证。
 PDF 的公开验收不包含正式评测的证据页召回率门槛，尚不能据此确认正式得分。
 
-向 `Jun3xu/powercontext-2026-competition` 推送时 GitHub 返回：
-`ERROR: Your account is suspended. Please visit https://support.github.com for more information.`
-公开远端仍可读取旧提交；新实现尚未推送、尚未提交平台，正式成绩仍为 90。
-账号恢复后先验证 seekdb 原生行为，再推送实际 commit、统一提测并核对平台回执和成绩。
+2026-11-02 已使用 Jun3xu 专用 SSH 身份成功推送 `main`：
+`38416bd62c1487e282890cb618d2451022186d81`。HTTPS 匿名读取和 SSH 读取均指向该提交。
+先前的暂停报错来自未指定该身份的 Git 操作，不能据此判断 Jun3xu 账号被暂停。
+新版本仍未提交到 OceanBase 平台，因此正式成绩仍为 90；下一步是在已登录比赛页填写该完整 commit 与 `main` 并提交，随后核对平台回执和成绩。
