@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from powercontext._logging import log_safely
 from powercontext.artifacts import Artifact, ArtifactLineage, ArtifactRef
 from powercontext.builtin.artifacts.memory.canonical import (
+    MAX_MEMORY_TEXT_BYTES,
     canonical_embedding,
     canonical_error_code,
     canonical_json,
@@ -37,10 +38,10 @@ from powercontext.builtin.artifacts.memory.canonical import (
     entry_content_bytes,
     entry_content_hash,
     memory_content_bytes,
+    normalize_entry_text,
     normalize_kind,
     normalize_query,
     normalize_reason,
-    normalize_text,
     validate_identifier,
 )
 from powercontext.builtin.artifacts.memory.errors import (
@@ -112,6 +113,7 @@ from powercontext.errors import RevisionConflictError
 from powercontext.sources import (
     TEXT_EVIDENCE_PROJECTION_KEY,
     Source,
+    SourceMaterialization,
     SourceObservation,
     SourceProjectionKey,
     SourceRef,
@@ -1654,18 +1656,56 @@ class MemoryService:
             sources = (*previous.sources, *candidate_source_refs)
             artifacts = (*previous.artifacts, *candidate_artifacts)
         try:
-            return self._entry_material(
+            material = self._entry_material(
                 kind=candidate.kind,
                 text=candidate.text,
                 sources=sources,
                 artifacts=artifacts,
             )
+            if len(material.text.encode("utf-8")) > MAX_MEMORY_TEXT_BYTES:
+                await self._require_captured_page_body(material.text, sources, candidate_sources)
         except (TypeError, ValueError) as error:
             raise InvalidMemoryCandidateError(
                 "canonical",
                 str(error),
                 canonical_code=canonical_error_code(error),
             ) from error
+        return material
+
+    async def _require_captured_page_body(
+        self, text: str, references: Sequence[SourceRef], candidate_sources: Sequence[Source]
+    ) -> None:
+        """A larger body must be an unchanged complete captured PDF projection."""
+        if self._source_resolver is None:
+            raise InvalidMemoryEvidenceError("captured-page-content")
+        candidates = {}
+        for source in candidate_sources:
+            reference = self._source_refs((source,))[0]
+            candidates[(reference.source_type, reference.source_id)] = source
+        for ref in references:
+            if ref.source_type != "pdf-page":
+                continue
+            try:
+                source = candidates.get((ref.source_type, ref.source_id))
+                if source is None:
+                    source = await self._source_resolver.get_ref(ref)
+                if source.materialization is not SourceMaterialization.CAPTURED:
+                    continue
+                value = (
+                    source.projection(TEXT_EVIDENCE_PROJECTION_KEY)
+                    if isinstance(source, SourceObservation)
+                    else self._source_resolver.project(source, TEXT_EVIDENCE_PROJECTION_KEY)
+                )
+                projection = TextEvidence.model_validate(value)
+                if (
+                    projection.source_type == "pdf-page"
+                    and projection.source_id == ref.source_id
+                    and normalize_query(projection.content) == text
+                ):
+                    return
+            except (LookupError, TypeError, ValueError):
+                continue
+        raise InvalidMemoryEvidenceError("captured-page-content")
 
     async def _canonical_candidate_sources(
         self,
@@ -1717,11 +1757,11 @@ class MemoryService:
         artifacts: Sequence[ArtifactRef],
     ) -> _EntryMaterial:
         normalized_kind = normalize_kind(kind)
-        normalized_text = normalize_text(text)
         canonical_sources = _canonical_source_refs(sources)
         canonical_artifacts = _canonical_artifact_refs(artifacts)
         source_refs = tuple(source.model_dump(mode="json") for source in canonical_sources)
         artifact_refs = tuple(artifact.model_dump(mode="json") for artifact in canonical_artifacts)
+        normalized_text = normalize_entry_text(text, kind=normalized_kind, source_refs=source_refs)
         content_bytes = entry_content_bytes(
             kind=normalized_kind,
             text=normalized_text,
@@ -1824,7 +1864,7 @@ def _raise_if_write_held(plan: MemoryWritePlan) -> None:
 
 
 def _bounded_gate_evidence(identity: str, content: str) -> _GateEvidenceEntry:
-    normalized = normalize_text(content)
+    normalized = normalize_query(content)
     return _GateEvidenceEntry(
         text=f"{identity}\n{normalized[:_GATE_EVIDENCE_TEXT_LIMIT]}",
         complete=len(normalized) <= _GATE_EVIDENCE_TEXT_LIMIT,

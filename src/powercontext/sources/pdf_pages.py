@@ -21,6 +21,7 @@ import io
 
 from pydantic import BaseModel
 
+from powercontext.sources._pdf_text import extract_pdf_page_text
 from powercontext.sources._pdf_validation import validate_pdf_text_streams
 from powercontext.sources.definitions import AdapterSourceDefinition
 from powercontext.sources.models import Source, SourceMaterialization
@@ -52,7 +53,7 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
         digest = hashlib.sha256(value.content).hexdigest()
         return tuple(
             PDFPageInput(
-                document_id=value.document_id, document_sha256=digest, page_number=i, text=page.extract_text() or ""
+                document_id=value.document_id, document_sha256=digest, page_number=i, text=extract_pdf_page_text(page)
             )
             for i, page in enumerate(reader.pages, 1)
         )

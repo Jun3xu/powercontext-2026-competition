@@ -83,6 +83,7 @@ class InvalidMemoryEvidenceError(MemoryLayerError, ValueError):
             "source-outside": "entry Source evidence is outside the allowed evidence set",
             "artifact-outside": "entry Artifact evidence is outside the allowed evidence set",
             "projection": "Memory evidence projection must be JSON-compatible",
+            "captured-page-content": "long PDF evidence must exactly match its captured page projection",
             "source-adapter": "Source evidence requires a Source adapter",
         }
         super().__init__(messages.get(code, f"invalid memory evidence: {code}"))

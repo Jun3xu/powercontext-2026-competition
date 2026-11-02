@@ -30,6 +30,8 @@ from powercontext.builtin.artifacts.memory.models import MemoryContent
 
 _ENTRY_HASH_DOMAIN = b"powercontext:entry-content:v1\0"
 _EMBEDDING_HASH_DOMAIN = b"powercontext:embedding-content:v1\0"
+MAX_MEMORY_TEXT_BYTES = 8192
+MAX_CAPTURED_PDF_TEXT_BYTES = 1_048_576
 _LOWER_HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -38,6 +40,7 @@ class _CanonicalValueError(ValueError):
         self.code = code
         messages = {
             "text-too-long": "memory entry text must not exceed 8192 UTF-8 bytes",
+            "pdf-page-too-long": "captured PDF page text must not exceed 1048576 UTF-8 bytes",
             "reason-too-long": "memory change reason must not exceed 512 Unicode code points",
             "identifier-empty": "memory identifiers must be non-empty strings",
             "identifier-ascii": "memory identifiers must contain only ASCII characters",
@@ -82,8 +85,26 @@ def normalize_text(value: str) -> str:
     """Normalize and validate one durable entry body."""
 
     normalized = _normalize_non_empty_string(value, "memory entry text")
-    if len(normalized.encode("utf-8")) > 8192:
+    if len(normalized.encode("utf-8")) > MAX_MEMORY_TEXT_BYTES:
         raise _CanonicalValueError("text-too-long")
+    return normalized
+
+
+def normalize_entry_text(value: str, *, kind: str, source_refs: Sequence[object]) -> str:
+    """Use a stable bounded representation for complete captured PDF pages.
+
+    The service checks long writes against the captured projection. Immutable PDF
+    references then retain the same size policy for hashing, reads and rebuilds.
+    All other entry bodies keep their ordinary 8 KiB contract.
+    """
+    pdf_evidence = kind == "source-evidence" and any(
+        isinstance(ref, Mapping) and ref.get("source_type") == "pdf-page" for ref in source_refs
+    )
+    if not pdf_evidence:
+        return normalize_text(value)
+    normalized = _normalize_non_empty_string(value, "memory entry text")
+    if len(normalized.encode("utf-8")) > MAX_CAPTURED_PDF_TEXT_BYTES:
+        raise _CanonicalValueError("pdf-page-too-long")
     return normalized
 
 
@@ -160,7 +181,7 @@ def entry_content_bytes(
 
     return canonical_json({
         "kind": normalize_kind(kind),
-        "text": normalize_text(text),
+        "text": normalize_entry_text(text, kind=normalize_kind(kind), source_refs=source_refs),
         "source_refs": normalize_refs(source_refs),
         "artifact_refs": normalize_refs(artifact_refs),
     })
