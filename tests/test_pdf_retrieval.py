@@ -58,3 +58,37 @@ async def test_named_company_disambiguates_identical_statements():
         + ["ACME_2024_10K\nConsolidated Statements of Income\nNet sales 100. Operating income 20."]
     )
     assert await search_pdf_pages(memory, "Acme operating income in FY2024", limit=1) == (25,)
+
+
+@pytest.mark.asyncio
+async def test_explicit_company_cannot_be_displaced_by_other_reports():
+    memory = ReportMemory(
+        [
+            f"OTHER_{n}_2024_10K\nConsolidated Statements of Income\n"
+            "Acme is a competitor. Revenue net sales operating income earnings profit. " * 3
+            for n in range(25)
+        ]
+        + ["ACME_2024_10K\nNet sales 100."]
+    )
+    result = await search_pdf_pages(memory, "What revenue did Acme earn in FY2024?", limit=20)
+    assert 25 in result
+    assert result == (25,)
+
+
+@pytest.mark.asyncio
+async def test_requested_fiscal_year_selects_matching_report():
+    memory = ReportMemory(
+        [
+            f"ACME_{year}_10K\nConsolidated Statement of Income\nRevenue net sales profit earnings."
+            for year in range(1995, 2020)
+        ]
+        + ["ACME_2024_10K\nNet sales 100."]
+    )
+    result = await search_pdf_pages(memory, "What was Acme revenue in FY2024?", limit=20)
+    assert result == (25,)
+
+
+@pytest.mark.asyncio
+async def test_missing_requested_year_keeps_available_report():
+    memory = ReportMemory(["ACME_2024_10K\nPrior year net sales 2023 90."])
+    assert await search_pdf_pages(memory, "What was Acme revenue in FY2023?", limit=20) == (0,)

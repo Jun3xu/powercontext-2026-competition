@@ -83,7 +83,7 @@ class PDFPageProjection:
     name = TEXT_EVIDENCE_PROJECTION_KEY.name
     version = TEXT_EVIDENCE_PROJECTION_KEY.version
     source_class = PDFPageSource
-    output_class = TextEvidence
+    output_class: type[BaseModel] = TextEvidence
 
     def project(self, source, /):
         page = source.page
@@ -128,69 +128,173 @@ _PDF_SECTION_QUERIES = (
 )
 
 
-async def search_pdf_pages(memory, question: str, limit: int = 10):
-    """Rank scoped, persisted pages with lexical and financial-vocabulary retrieval.
+_PDF_STOP_WORDS = {
+    "and",
+    "respond",
+    "details",
+    "been",
+    "to",
+    "were",
+    "materially",
+    "which",
+    "shown",
+    "explicitly",
+    "fy",
+    "what",
+    "s",
+    "much",
+    "many",
+    "directly",
+    "important",
+    "be",
+    "had",
+    "outlined",
+    "this",
+    "at",
+    "the",
+    "by",
+    "company",
+    "with",
+    "do",
+    "it",
+    "is",
+    "for",
+    "analyst",
+    "question",
+    "in",
+    "response",
+    "reported",
+    "ongoing",
+    "use",
+    "did",
+    "state",
+    "as",
+    "or",
+    "has",
+    "not",
+    "fiscal",
+    "within",
+    "unadjusted",
+    "a",
+    "from",
+    "are",
+    "then",
+    "define",
+    "less",
+    "only",
+    "using",
+    "perspective",
+    "on",
+    "an",
+    "does",
+    "calculate",
+    "any",
+    "how",
+    "would",
+    "that",
+    "answer",
+    "primarily",
+    "quantity",
+    "was",
+    "of",
+    "its",
+    "assuming",
+    "have",
+    "can",
+    "give",
+}
 
-    Keep page text unchanged: normalization and expansion apply only to the derived
-    retrieval view, so citations still resolve to the complete original page.
-    """
-    import math
+
+def _pdf_tokens(text: str) -> list[str]:
     import re
-    from collections import Counter
 
-    if limit <= 0:
-        return ()
-    records = (await memory.list()).entries
-    if not records:
-        return ()
-    stop = set(
-        "a an the is are was were be been of in on at to for from by with and or as what how much many "
-        "does did do would have has had which this that its it s company answer respond question "
-        "give response assuming perspective analyst details shown use using can only within "
-        "calculate define reported directly outlined explicitly state materially important ongoing primarily "
-        "unadjusted less quantity then not any".split()
-    )
+    words = re.findall(r"[a-z]+|\d+", text.lower())
+    result = []
+    for word in words:
+        if word in _PDF_STOP_WORDS:
+            continue
+        if len(word) > 4:
+            if word.endswith("ies"):
+                word = word[:-3] + "y"
+            elif word.endswith("s") and not word.endswith(("ss", "us", "is")):
+                word = word[:-1]
+            if word.endswith("ing") and len(word) > 6:
+                word = word[:-3]
+            elif word.endswith("ed") and len(word) > 5:
+                word = word[:-2]
+        result.append(word)
+    return result
 
-    def tokens(text):
-        words = re.findall(r"[a-z]+|\d+", text.lower())
-        result = []
-        for word in words:
-            if word in stop or word in {"fy", "fiscal"}:
-                continue
-            if len(word) > 4:
-                if word.endswith("ies"):
-                    word = word[:-3] + "y"
-                elif word.endswith("s") and not word.endswith(("ss", "us", "is")):
-                    word = word[:-1]
-                if word.endswith("ing") and len(word) > 6:
-                    word = word[:-3]
-                elif word.endswith("ed") and len(word) > 5:
-                    word = word[:-2]
-            result.append(word)
-        return result
 
-    documents = [record.entry.text.partition("\n")[0] for record in records]
-    bodies = [record.entry.text.partition("\n")[2] for record in records]
-    page_tokens = [tokens(body) for body in bodies]
-    counts = [Counter(words) for words in page_tokens]
-    lengths = [sum(count.values()) for count in counts]
-    average = sum(lengths) / len(lengths) or 1
-    query = Counter(tokens(question))
+def _select_pdf_reports(records, question: str):
+    import re
+
+    # The projection's first line is the original document identity. Resolve an
+    # explicitly named issuer before scoring page text; competitor mentions in
+    # another issuer's report must not override this identity.
+    question_compact = re.sub(r"[^a-z0-9]", "", question.lower())
+    report_identities = {}
+    for record in records:
+        name = record.entry.text.partition("\n")[0]
+        match = re.search(r"(?:19|20)\d{2}", name)
+        company = name[: match.start()] if match else name
+        company = re.sub(r"[^a-z0-9]", "", company.lower())
+        report_identities[name] = (company, match.group() if match else None)
+    companies = {
+        company
+        for company, _ in report_identities.values()
+        if company
+        and (
+            (len(company) >= 4 and company in question_compact)
+            or (len(company) < 4 and re.search(rf"\b{re.escape(company)}\b", question, re.IGNORECASE))
+        )
+    }
+    if companies:
+        # Prefer the longest explicit name when one issuer name prefixes another.
+        companies = {name for name in companies if not any(name != other and name in other for other in companies)}
+        records = tuple(
+            record for record in records if report_identities[record.entry.text.partition("\n")[0]][0] in companies
+        )
+        years = set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", question))
+        matching_year = tuple(
+            record for record in records if report_identities[record.entry.text.partition("\n")[0]][1] in years
+        )
+        # Earlier periods may only be reported in a later available filing.
+        if matching_year:
+            records = matching_year
+    return records
+
+
+def _pdf_query_terms(question: str) -> dict[str, float]:
+    import re
+
+    query = _pdf_tokens(question)
     expanded = dict.fromkeys(query, 1.0)
     for pattern, vocabulary in _PDF_QUERY_EQUIVALENTS:
         if re.search(pattern, question.lower()):
-            for word in tokens(vocabulary):
+            for word in _pdf_tokens(vocabulary):
                 expanded.setdefault(word, 0.45)
     # Years are useful context, but should not outrank the requested subject.
     for word in expanded:
         if word.isdigit():
             expanded[word] *= 0.2
+    return expanded
+
+
+def _pdf_page_scores(records, question: str) -> list[float]:
+    import math
+    import re
+    from collections import Counter
+
+    bodies = [record.entry.text.partition("\n")[2] for record in records]
+    page_tokens = [_pdf_tokens(body) for body in bodies]
+    counts = [Counter(words) for words in page_tokens]
+    lengths = [sum(count.values()) for count in counts]
+    average = sum(lengths) / len(lengths) or 1
+    expanded = _pdf_query_terms(question)
     frequencies = {term: sum(term in count for count in counts) for term in expanded}
     idfs = {term: math.log(1 + (len(records) - n + 0.5) / (n + 0.5)) for term, n in frequencies.items()}
-    query_pairs = set(zip(tokens(question), tokens(question)[1:], strict=False))
-    query_names = set(re.findall(r"[a-z]+", question.lower())) - stop
-    document_names = [set(re.findall(r"[a-z]+", name.lower())) - {"k", "q"} for name in documents]
-    named_documents = {name for name, terms in zip(documents, document_names, strict=True) if terms & query_names}
+    query_pairs = set(zip(_pdf_tokens(question), _pdf_tokens(question)[1:], strict=False))
     expanded_scores = []
     for index, count in enumerate(counts):
         norm = 1.2 * (0.25 + 0.75 * lengths[index] / average)
@@ -213,9 +317,21 @@ async def search_pdf_pages(memory, question: str, limit: int = 10):
                 rf"^(?:item\s+\d+[a-z]?[.:]?\s+)?(?:{title_pattern})\b", heading_text, re.MULTILINE
             ):
                 score += 12.0
-        if documents[index] in named_documents:
-            score *= 1.5
         expanded_scores.append(score)
+    return expanded_scores
+
+
+async def search_pdf_pages(memory, question: str, limit: int = 10):
+    """Return exact persisted page citations for a scoped report query.
+
+    Retrieval normalization does not change captured page text or references.
+    """
+    if limit <= 0:
+        return ()
+    records = _select_pdf_reports((await memory.list()).entries, question)
+    if not records:
+        return ()
+    expanded_scores = _pdf_page_scores(records, question)
     ranked = sorted(range(len(records)), key=lambda i: (-expanded_scores[i], records[i].entry.entry_id))
     seen, citations = set(), []
     for index in ranked:
