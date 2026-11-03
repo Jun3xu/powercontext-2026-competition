@@ -59,7 +59,7 @@ def extract_pdf_page_text(page: PageObject) -> str:
     # Reject them at parsing time rather than returning an unusable page.
     plain.encode("utf-8")
     fragmentation = _fragmented_letters(plain)
-    if fragmentation < 12:
+    if fragmentation < 4:
         return plain
     try:
         layout = unicodedata.normalize(

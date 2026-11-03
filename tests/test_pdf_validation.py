@@ -117,3 +117,16 @@ def test_large_complete_stream_with_trailing_newline_terminates():
     validate_pdf_text_streams(PdfReader(io.BytesIO(raw), strict=True))
     pages = parse_pdf_document(PDFDocumentInput(document_id="large-complete", content=raw))
     assert pages[0].text == "Complete text"
+
+
+@pytest.mark.parametrize("resource", ["/Font", "/XObject"])
+def test_unused_null_resource_child_preserves_blank_page(resource):
+    writer = PdfWriter()
+    page = writer.add_blank_page(100, 100)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject(resource): DictionaryObject({NameObject("/Unused"): NullObject()})
+    })
+    output = io.BytesIO()
+    writer.write(output)
+    pages = parse_pdf_document(PDFDocumentInput(document_id="blank-null-resource", content=output.getvalue()))
+    assert len(pages) == 1 and pages[0].page_number == 1 and pages[0].text == ""

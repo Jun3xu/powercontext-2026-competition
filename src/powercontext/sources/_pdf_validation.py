@@ -70,6 +70,8 @@ def _validate_resources(resources, seen: set[int]) -> None:
     fonts = fonts if isinstance(fonts, DictionaryObject) else {}
     for reference in fonts.values():
         font = reference.get_object()
+        if isinstance(font, NullObject):
+            continue
         mapping = font.get("/ToUnicode")
         if mapping is not None:
             _validate_text_object(mapping, seen)
@@ -78,6 +80,8 @@ def _validate_resources(resources, seen: set[int]) -> None:
     objects = objects if isinstance(objects, DictionaryObject) else {}
     for reference in objects.values():
         obj = reference.get_object()
+        if isinstance(obj, NullObject):
+            continue
         if obj.get("/Subtype") == "/Form":
             _validate_text_object(obj, seen)
             _validate_resources(obj.get("/Resources"), seen)

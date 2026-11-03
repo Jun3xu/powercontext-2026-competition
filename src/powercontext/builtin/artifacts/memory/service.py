@@ -1761,7 +1761,7 @@ class MemoryService:
         canonical_artifacts = _canonical_artifact_refs(artifacts)
         source_refs = tuple(source.model_dump(mode="json") for source in canonical_sources)
         artifact_refs = tuple(artifact.model_dump(mode="json") for artifact in canonical_artifacts)
-        normalized_text = normalize_entry_text(text, kind=normalized_kind, source_refs=source_refs)
+        normalized_text = normalize_entry_text(text, source_refs=source_refs)
         content_bytes = entry_content_bytes(
             kind=normalized_kind,
             text=normalized_text,

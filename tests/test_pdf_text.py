@@ -116,3 +116,16 @@ def test_invalid_font_unicode_mapping_fails_before_persistence():
     assert PdfReader(output).pages[0].extract_text() == "\ud800"
     with pytest.raises(ValueError, match="cannot completely parse PDF"):
         parse_pdf_document(PDFDocumentInput(document_id="font-map", content=output.getvalue()))
+
+
+def test_short_positioned_title_is_recovered():
+    glyphs = " ".join(f"({char}) -135" for char in "Revenue")
+    page = _page(f"BT /F1 12 Tf 1 0 0 1 20 250 Tm [{glyphs}] TJ 0 -20 Td (Current financial year) Tj ET".encode())
+    assert "Revenue" not in page.extract_text()
+    assert extract_pdf_page_text(page) == "Revenue\nCurrent financial year"
+
+
+@pytest.mark.parametrize("labels", ["A B C D E F G H", "A B C D"])
+def test_intentional_letter_lists_and_column_labels_are_not_collapsed(labels):
+    page = _page(f"BT /F1 12 Tf 20 250 Td ({labels}) Tj 0 -20 Td (10 20 30 40) Tj ET".encode())
+    assert extract_pdf_page_text(page) == page.extract_text()

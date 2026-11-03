@@ -24,13 +24,14 @@ from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY
 
 
 class _PagePipeline:
-    def __init__(self, *, alter: bool = False):
+    def __init__(self, *, alter: bool = False, kind: str = "source-evidence"):
         self.alter = alter
+        self.kind = kind
 
     async def extract(self, request, /):
         return tuple(
             MemoryEntryInput(
-                kind="source-evidence",
+                kind=self.kind,
                 text=source.projection(TEXT_EVIDENCE_PROJECTION_KEY)["content"] + (" altered" if self.alter else ""),
                 sources=(source,),
             )
@@ -55,11 +56,12 @@ async def _seed(path: Path, text: str = "Long complete page with financial figur
 
 
 @pytest.mark.asyncio
-async def test_complete_long_pdf_page_survives_restart_and_rebuild(tmp_path):
+@pytest.mark.parametrize("kind", ["source-evidence", "fact"])
+async def test_complete_long_pdf_page_survives_restart_and_rebuild(tmp_path, kind):
     config, scope_id, observation = await _seed(tmp_path)
     expected = observation.projection(TEXT_EVIDENCE_PROJECTION_KEY)["content"].strip()
     assert len(expected.encode()) > 8192
-    async with open_builtin_runtime(config, candidate_pipeline=_PagePipeline()) as runtime:
+    async with open_builtin_runtime(config, candidate_pipeline=_PagePipeline(kind=kind)) as runtime:
         memory = runtime.memory.for_scope(scope_id)
         await memory.flush()
         entries = (await memory.list()).entries
@@ -80,18 +82,20 @@ async def test_complete_long_pdf_page_survives_restart_and_rebuild(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ordinary_long_memory_still_rejected(tmp_path):
+@pytest.mark.parametrize("kind", ["note", "fact"])
+async def test_ordinary_long_memory_still_rejected(tmp_path, kind):
     config, scope_id, _ = await _seed(tmp_path)
     async with open_builtin_runtime(config) as runtime:
         memory = runtime.memory.for_scope(scope_id)
         with pytest.raises(ValueError, match="8192 UTF-8 bytes"):
-            await memory.remember(RememberMemoryRequest(entries=(MemoryEntryInput(kind="note", text="x" * 8193),)))
+            await memory.remember(RememberMemoryRequest(entries=(MemoryEntryInput(kind=kind, text="x" * 8193),)))
 
 
 @pytest.mark.asyncio
-async def test_captured_reference_does_not_allow_altered_long_text(tmp_path):
+@pytest.mark.parametrize("kind", ["source-evidence", "fact"])
+async def test_captured_reference_does_not_allow_altered_long_text(tmp_path, kind):
     config, scope_id, _ = await _seed(tmp_path)
-    async with open_builtin_runtime(config, candidate_pipeline=_PagePipeline(alter=True)) as runtime:
+    async with open_builtin_runtime(config, candidate_pipeline=_PagePipeline(alter=True, kind=kind)) as runtime:
         memory = runtime.memory.for_scope(scope_id)
         with pytest.raises(ValueError, match="captured page projection"):
             await memory.flush()

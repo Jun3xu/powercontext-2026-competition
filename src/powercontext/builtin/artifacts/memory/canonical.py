@@ -90,16 +90,14 @@ def normalize_text(value: str) -> str:
     return normalized
 
 
-def normalize_entry_text(value: str, *, kind: str, source_refs: Sequence[object]) -> str:
+def normalize_entry_text(value: str, *, source_refs: Sequence[object]) -> str:
     """Use a stable bounded representation for complete captured PDF pages.
 
     The service checks long writes against the captured projection. Immutable PDF
     references then retain the same size policy for hashing, reads and rebuilds.
     All other entry bodies keep their ordinary 8 KiB contract.
     """
-    pdf_evidence = kind == "source-evidence" and any(
-        isinstance(ref, Mapping) and ref.get("source_type") == "pdf-page" for ref in source_refs
-    )
+    pdf_evidence = any(isinstance(ref, Mapping) and ref.get("source_type") == "pdf-page" for ref in source_refs)
     if not pdf_evidence:
         return normalize_text(value)
     normalized = _normalize_non_empty_string(value, "memory entry text")
@@ -181,7 +179,7 @@ def entry_content_bytes(
 
     return canonical_json({
         "kind": normalize_kind(kind),
-        "text": normalize_entry_text(text, kind=normalize_kind(kind), source_refs=source_refs),
+        "text": normalize_entry_text(text, source_refs=source_refs),
         "source_refs": normalize_refs(source_refs),
         "artifact_refs": normalize_refs(artifact_refs),
     })
