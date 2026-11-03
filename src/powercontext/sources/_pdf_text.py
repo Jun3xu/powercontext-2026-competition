@@ -29,12 +29,12 @@ from collections import Counter
 from pypdf import PageObject
 
 
-def _fragmented_letters(text: str) -> int:
+def _fragmented_glyphs(text: str) -> int:
     fragmented = 0
     for line in text.splitlines():
         run = 0
         for token in [*line.split(), ""]:
-            if len(token) == 1 and token.isalpha():
+            if len(token) == 1 and token.isalnum():
                 run += 1
             else:
                 if run >= 4:
@@ -48,7 +48,7 @@ def _glyphs(text: str) -> Counter[str]:
 
 
 def extract_pdf_page_text(page: PageObject) -> str:
-    """Keep plain extraction unless layout repairs widespread letter fragmentation.
+    """Keep plain extraction unless layout repairs glyph fragmentation.
 
     Content validation is a separate prerequisite: optional layout failures may
     fall back to the successful plain extraction, but must not hide input damage.
@@ -58,7 +58,7 @@ def extract_pdf_page_text(page: PageObject) -> str:
     # Malformed font maps can produce lone surrogates that cannot be persisted.
     # Reject them at parsing time rather than returning an unusable page.
     plain.encode("utf-8")
-    fragmentation = _fragmented_letters(plain)
+    fragmentation = _fragmented_glyphs(plain)
     if fragmentation < 4:
         return plain
     try:
@@ -71,10 +71,13 @@ def extract_pdf_page_text(page: PageObject) -> str:
         )
     except Exception:
         return plain
+    # Existing complete numbers remain intact. Isolated digits may be joined
+    # by geometric layout when the plain extractor introduced false spaces.
+    complete_numbers = Counter(number for number in re.findall(r"\d+", plain) if len(number) > 1)
     if (
-        _fragmented_letters(layout) > fragmentation // 2
+        _fragmented_glyphs(layout) > fragmentation // 2
         or _glyphs(layout) != _glyphs(plain)
-        or Counter(re.findall(r"\d+", layout)) != Counter(re.findall(r"\d+", plain))
+        or complete_numbers - Counter(re.findall(r"\d+", layout))
     ):
         return plain
     # Layout's large horizontal padding is not original content. Preserve line

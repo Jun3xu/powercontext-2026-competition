@@ -129,3 +129,25 @@ def test_short_positioned_title_is_recovered():
 def test_intentional_letter_lists_and_column_labels_are_not_collapsed(labels):
     page = _page(f"BT /F1 12 Tf 20 250 Td ({labels}) Tj 0 -20 Td (10 20 30 40) Tj ET".encode())
     assert extract_pdf_page_text(page) == page.extract_text()
+
+
+def test_positioned_letters_and_digits_recover_words_and_values():
+    text = "Revenue 1234 Income 5678"
+    glyphs = " ".join(f"({char}) -{500 if char == ' ' else 135}" for char in text)
+    page = _page(f"BT /F1 12 Tf 1 0 0 1 20 250 Tm [{glyphs}] TJ ET".encode())
+    assert "1234" not in page.extract_text()
+    assert extract_pdf_page_text(page) == text
+
+
+@pytest.mark.parametrize("tracked", [False, True])
+def test_wide_numeric_columns_remain_separate_during_layout(tracked):
+    def draw(value):
+        return "[" + " ".join(f"({char}) -135" for char in value) + "] TJ" if tracked else f"({value}) Tj"
+
+    content = (
+        "BT /F1 12 Tf 1 0 0 1 20 250 Tm (Revenue) Tj "
+        f"1 0 0 1 150 250 Tm {draw('1234')} 1 0 0 1 250 250 Tm {draw('5678')} ET"
+    )
+    page = _page(content.encode())
+    result = extract_pdf_page_text(page)
+    assert result.split() == ["Revenue", "1234", "5678"]
