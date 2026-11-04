@@ -21,7 +21,8 @@ import io
 
 from pydantic import BaseModel
 
-from powercontext.sources._pdf_retrieval import rank_pdf_records
+from powercontext.builtin.runtime import SearchMemoryRequest
+from powercontext.sources._pdf_retrieval import pdf_retrieval_queries, rank_pdf_records
 from powercontext.sources._pdf_text import extract_pdf_page_text
 from powercontext.sources._pdf_validation import validate_pdf_text_streams
 from powercontext.sources.definitions import AdapterSourceDefinition
@@ -103,11 +104,19 @@ PDF_PAGE_SOURCE_DEFINITION = AdapterSourceDefinition(PDFPageAdapter(), projectio
 
 
 async def search_pdf_pages(memory, question: str, limit: int = 10):
-    """Return exact citations from the current scoped PDF page records."""
+    """Retrieve Runtime-indexed PDF candidates and return their exact citations."""
     if limit <= 0:
         return ()
     records = (await memory.list()).entries
-    ranked = rank_pdf_records(records, question, limit)
+    if not records or not question.strip():
+        return ()
+    candidate_limit = max(80, len(records), limit)
+    candidate_ids = set()
+    for query in pdf_retrieval_queries(records, question):
+        result = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=candidate_limit))
+        candidate_ids.update(hit.entry_id for hit in result.hits)
+    candidates = tuple(record for record in records if record.entry.entry_id in candidate_ids)
+    ranked = rank_pdf_records(candidates, question, limit)
     seen, citations = set(), []
     for record in ranked:
         identity = tuple((source.source_type, source.source_id) for source in record.entry.sources)

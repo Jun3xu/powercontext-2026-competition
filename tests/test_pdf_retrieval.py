@@ -8,7 +8,7 @@ from powercontext.sources.pdf_pages import search_pdf_pages
 
 
 class ReportMemory:
-    def __init__(self, texts):
+    def __init__(self, texts, *, searchable_ids=None):
         self.records = tuple(
             SimpleNamespace(
                 entry=SimpleNamespace(
@@ -20,9 +20,23 @@ class ReportMemory:
             )
             for index, text in enumerate(texts)
         )
+        self.searchable_ids = None if searchable_ids is None else set(searchable_ids)
+        self.searches = []
 
     async def list(self):
         return SimpleNamespace(entries=self.records)
+
+    async def search(self, request):
+        self.searches.append(request)
+        terms = {term.lower() for term in request.query.replace("_", " ").split() if len(term) > 1}
+        hits = []
+        for record in self.records:
+            if self.searchable_ids is not None and int(record.entry.entry_id) not in self.searchable_ids:
+                continue
+            text = record.entry.text.lower().replace("_", " ")
+            if any(term in text for term in terms):
+                hits.append(SimpleNamespace(entry_id=record.entry.entry_id))
+        return SimpleNamespace(hits=tuple(hits[: request.limit]))
 
 
 @pytest.mark.asyncio
@@ -200,6 +214,20 @@ async def test_duplicate_page_sources_do_not_consume_the_result_limit():
     result = await search_pdf_pages(memory, "Acme revenues", limit=2)
     assert len(result) == 2 and 2 in result
     assert not ({0, 1} <= set(result))
+
+
+@pytest.mark.asyncio
+async def test_runtime_fts_candidates_bound_page_ranking():
+    memory = ReportMemory(
+        [
+            "ACME_2024_10K\nNet sales 100.",
+            "ACME_2024_10K\nLegal Proceedings\nPending litigation and contingent liabilities.",
+        ],
+        searchable_ids={1},
+    )
+
+    assert await search_pdf_pages(memory, "Does Acme have legal proceedings in FY2024?", limit=20) == (1,)
+    assert memory.searches and {request.mode for request in memory.searches} == {"fts"}
 
 
 _COVERAGE_CASES = []

@@ -258,6 +258,21 @@ def _query_weights(question: str) -> dict[str, float]:
     return {word: weight * (0.2 if word.isdigit() else 1.0) for word, weight in weights.items()}
 
 
+def pdf_retrieval_queries(records: Sequence[MemoryEntryRecord], question: str) -> tuple[str, ...]:
+    """Return FTS probes that preserve the caller's question and report scope.
+
+    The Runtime owns persisted-page recall.  These probes only broaden that
+    recall with accounting synonyms and an explicitly named report label; they
+    never introduce a page that is not returned by the scoped Memory search.
+    """
+    labels = []
+    for page in _pages(records):
+        named, _ = _issuer_match(page.document, question)
+        if named:
+            labels.append(page.document)
+    return tuple(dict.fromkeys((question, *_query_weights(question), *labels)))
+
+
 def _issuer_match(document: str, question: str) -> tuple[bool, bool]:
     year = re.search(r"(?:19|20)\d{2}", document)
     issuer = document[: year.start()] if year else document
